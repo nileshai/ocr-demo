@@ -25,7 +25,7 @@ MODEL_OPTIONS = {
         "url": LOCAL_LLM_URL,
         "model": "nvidia/nvidia-nemotron-nano-9b-v2",
         "is_local": True,
-        "description": "Locally deployed on A100 GPU • Low latency • Best for real-time applications",
+        "description": "Locally deployed on GPU • Low latency • Best for real-time applications",
     },
     "API: Nemotron 3 Nano 30B (Accurate)": {
         "url": NVIDIA_API_URL,
@@ -35,7 +35,7 @@ MODEL_OPTIONS = {
     },
 }
 
-TIMEOUT = int(os.getenv("NIM_TIMEOUT", "300"))
+TIMEOUT = int(os.getenv("NIM_TIMEOUT", "600"))  # 10 minutes for large documents
 
 # NVIDIA Brand Colors
 NVIDIA_GREEN = "#76B900"
@@ -520,7 +520,7 @@ def render_status_indicators(services: dict):
     """, unsafe_allow_html=True)
 
 
-def call_ingest(file_bytes: bytes, filename: str) -> Dict[str, Any]:
+def call_ingest(file_bytes: bytes, filename: str, progress_bar=None, status_text=None) -> Dict[str, Any]:
     """Use NV Ingest /v1/convert endpoint to process document."""
     job_id = str(uuid.uuid4())
     
@@ -540,27 +540,47 @@ def call_ingest(file_bytes: bytes, filename: str) -> Dict[str, Any]:
         "extract_tables": "true",
     }
     
+    if progress_bar:
+        progress_bar.progress(5, text="Uploading document...")
+    
     resp = requests.post(INGEST_URL, files=files, data=data, timeout=TIMEOUT)
     resp.raise_for_status()
     result = resp.json()
     
+    if progress_bar:
+        progress_bar.progress(15, text="Document uploaded, processing...")
+    
     if result.get("status") == "processing":
         task_id = result.get("task_id", job_id)
-        return poll_for_result(task_id)
+        return poll_for_result(task_id, progress_bar=progress_bar, status_text=status_text)
+    
+    if progress_bar:
+        progress_bar.progress(50, text="OCR extraction complete!")
     
     return result
 
 
-def poll_for_result(task_id: str, max_wait: int = 120) -> Dict[str, Any]:
-    """Poll for job completion."""
+def poll_for_result(task_id: str, max_wait: int = 300, progress_bar=None, status_text=None) -> Dict[str, Any]:
+    """Poll for job completion (5 min timeout for large documents)."""
     start = time.time()
+    poll_count = 0
     while time.time() - start < max_wait:
+        elapsed = time.time() - start
+        # Progress from 15% to 50% during OCR polling
+        progress_pct = min(15 + int((elapsed / max_wait) * 35), 50)
+        
+        if progress_bar:
+            progress_bar.progress(progress_pct, text=f"Processing document... {progress_pct}%")
+        
         resp = requests.get(f"{STATUS_URL}/{task_id}", timeout=30)
         if resp.status_code == 200:
             data = resp.json()
             if data.get("status") == "completed":
+                if progress_bar:
+                    progress_bar.progress(50, text="OCR extraction complete!")
                 return data
-        time.sleep(2)
+        poll_count += 1
+        time.sleep(3)
     raise TimeoutError(f"Job {task_id} did not complete in {max_wait}s")
 
 
@@ -719,9 +739,11 @@ def main() -> None:
         st.markdown("---")
         st.markdown("### ⚡ Processing Results")
         
-        progress_container = st.container()
+        # Create progress bar
+        progress_bar = st.progress(0, text="Starting pipeline...")
+        status_text = st.empty()
         
-        with progress_container:
+        try:
             # Step 1: OCR
             st.markdown("""
             <div class="step-indicator">
@@ -730,69 +752,74 @@ def main() -> None:
             </div>
             """, unsafe_allow_html=True)
             
-            try:
-                with st.spinner(""):
-                    ingest_result = call_ingest(uploaded.read(), uploaded.name)
-                st.success("✅ Document processed successfully!")
-                
-                with st.expander("📋 View Raw OCR Output"):
-                    st.json(ingest_result)
-                
-                extracted_text = extract_text_from_result(ingest_result)
-                if not extracted_text.strip():
-                    extracted_text = json.dumps(ingest_result, indent=2)
-                
-                # Step 2: Show extracted text
-                st.markdown("""
-                <div class="step-indicator">
-                    <div class="step-number">2</div>
-                    <div class="step-text">Extracted Document Content</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                with st.expander("📄 View Extracted Text", expanded=False):
-                    st.text_area("", value=extracted_text, height=200, disabled=True, label_visibility="collapsed")
-                
-                # Step 3: LLM Analysis
-                st.markdown(f"""
-                <div class="step-indicator">
-                    <div class="step-number">3</div>
-                    <div class="step-text">Analyzing with {model_config['model'].split('/')[-1]}...</div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                with st.spinner(""):
-                    full_prompt = f"{custom_prompt}\n\nDocument content:\n{extracted_text[:8000]}"
-                    llm_response = call_llm(full_prompt, model_config, api_key)
-                
-                st.success("✅ Entity extraction complete!")
-                
-                # Results display
-                st.markdown("""
-                <div class="results-header">
-                    📊 Extracted Entities
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown(f"""
-                <div class="results-body">
-                """, unsafe_allow_html=True)
-                
-                st.markdown(llm_response)
-                
-                st.markdown("</div>", unsafe_allow_html=True)
-                
-            except requests.HTTPError as e:
-                st.error(f"❌ HTTP Error: {e.response.status_code}")
-                with st.expander("Error Details"):
-                    st.code(e.response.text[:1000])
-            except TimeoutError as e:
-                st.error(f"❌ Timeout: {e}")
-            except Exception as e:
-                st.error(f"❌ Error: {e}")
-                import traceback
-                with st.expander("Error Details"):
-                    st.code(traceback.format_exc())
+            ingest_result = call_ingest(uploaded.read(), uploaded.name, progress_bar=progress_bar, status_text=status_text)
+            progress_bar.progress(50, text="OCR complete! 50%")
+            st.success("✅ Document processed successfully!")
+            
+            with st.expander("📋 View Raw OCR Output"):
+                st.json(ingest_result)
+            
+            extracted_text = extract_text_from_result(ingest_result)
+            if not extracted_text.strip():
+                extracted_text = json.dumps(ingest_result, indent=2)
+            
+            # Step 2: Show extracted text
+            progress_bar.progress(55, text="Text extracted! 55%")
+            st.markdown("""
+            <div class="step-indicator">
+                <div class="step-number">2</div>
+                <div class="step-text">Extracted Document Content</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            with st.expander("📄 View Extracted Text", expanded=False):
+                st.text_area("", value=extracted_text, height=200, disabled=True, label_visibility="collapsed")
+            
+            # Step 3: LLM Analysis
+            progress_bar.progress(60, text="Sending to LLM for analysis... 60%")
+            st.markdown(f"""
+            <div class="step-indicator">
+                <div class="step-number">3</div>
+                <div class="step-text">Analyzing with {model_config['model'].split('/')[-1]}...</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            progress_bar.progress(70, text="LLM processing... 70%")
+            full_prompt = f"{custom_prompt}\n\nDocument content:\n{extracted_text[:8000]}"
+            llm_response = call_llm(full_prompt, model_config, api_key)
+            
+            progress_bar.progress(100, text="Complete! 100%")
+            st.success("✅ Entity extraction complete!")
+            
+            # Results display
+            st.markdown("""
+            <div class="results-header">
+                📊 Extracted Entities
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+            <div class="results-body">
+            """, unsafe_allow_html=True)
+            
+            st.markdown(llm_response)
+            
+            st.markdown("</div>", unsafe_allow_html=True)
+            
+        except requests.HTTPError as e:
+            progress_bar.progress(0, text="Error!")
+            st.error(f"❌ HTTP Error: {e.response.status_code}")
+            with st.expander("Error Details"):
+                st.code(e.response.text[:1000])
+        except TimeoutError as e:
+            progress_bar.progress(0, text="Timeout!")
+            st.error(f"❌ Timeout: {e}")
+        except Exception as e:
+            progress_bar.progress(0, text="Error!")
+            st.error(f"❌ Error: {e}")
+            import traceback
+            with st.expander("Error Details"):
+                st.code(traceback.format_exc())
     
     # Footer
     st.markdown("""
