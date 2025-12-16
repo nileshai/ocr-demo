@@ -539,10 +539,19 @@ def call_ingest(file_bytes: bytes, filename: str, progress_bar=None, status_text
     job_id = str(uuid.uuid4())
     
     ext = os.path.splitext(filename)[1].lower()
+    
+    # Map file extensions to valid document types and MIME types
+    # NV-Ingest expects "jpeg" not "jpg" for JPEG images
     if ext == ".pdf":
         mime_type = "application/pdf"
-    elif ext in [".png", ".jpg", ".jpeg"]:
-        mime_type = f"image/{ext.lstrip('.')}"
+    elif ext == ".jpg":
+        mime_type = "image/jpeg"
+        # Rename file to .jpeg for NV-Ingest compatibility
+        filename = filename.rsplit('.', 1)[0] + ".jpeg"
+    elif ext == ".jpeg":
+        mime_type = "image/jpeg"
+    elif ext == ".png":
+        mime_type = "image/png"
     else:
         mime_type = "application/pdf"
     
