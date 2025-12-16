@@ -388,6 +388,20 @@ def inject_custom_css():
             color: #E0E0E0 !important;
         }}
         
+        /* Progress bar text */
+        div[data-testid="stProgressBar"] p, 
+        div[data-testid="stProgress"] p,
+        .stProgress p,
+        .stProgress > div > div > div > div {{
+            color: #FFFFFF !important;
+            font-weight: 500 !important;
+        }}
+        
+        /* Make progress text visible */
+        [data-testid="stMarkdownContainer"] p {{
+            color: #FFFFFF !important;
+        }}
+        
         /* Hide default elements */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
