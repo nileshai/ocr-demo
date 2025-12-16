@@ -1,0 +1,99 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  nv-ingest:
+    image: nvcr.io/nvidia/nemo-microservices/nv-ingest:25.9.0
+    restart: unless-stopped
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MESSAGE_CLIENT_HOST=redis
+      - MESSAGE_CLIENT_PORT=6379
+      - MESSAGE_CLIENT_TYPE=redis
+      - INGEST_MESSAGE_CLIENT_TYPE=redis
+      - NV_INGEST_MESSAGE_CLIENT_TYPE=redis
+    ports:
+      - "8080:7670"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  retriever:
+    image: nvcr.io/nim/nvidia/nemoretriever-page-elements-v3:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  nemotron-parse:
+    image: nvcr.io/nim/nvidia/nemotron-parse:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+    ports:
+      - "8002:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  # LLM on GPU 1 (dedicated) - 49B model needs full 80GB
+  nemotron-llm:
+    image: nvcr.io/nim/nvidia/llama-3.3-nemotron-super-49b-v1.5:1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      - NIM_MANIFEST_SKIP_CHECK=1
+      - OMPI_MCA_btl_vader_single_copy_mechanism=none
+      - OMPI_MCA_btl=^vader
+    ports:
+      - "8003:8000"
+    ipc: host
+    shm_size: "32gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
+
+networks:
+  default:
+    driver: bridge
