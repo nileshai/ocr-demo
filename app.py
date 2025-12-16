@@ -677,14 +677,6 @@ def main() -> None:
     
     # Sidebar
     with st.sidebar:
-        st.markdown("""
-        <div style="text-align: center; padding: 1rem 0;">
-            <svg width="120" height="30" viewBox="0 0 120 30">
-                <text x="0" y="22" fill="#76B900" font-family="Inter, sans-serif" font-weight="700" font-size="18">NVIDIA</text>
-            </svg>
-        </div>
-        """, unsafe_allow_html=True)
-        
         st.markdown("### 🤖 Model Selection")
         selected_model = st.selectbox(
             "Choose LLM",
